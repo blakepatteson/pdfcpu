@@ -82,6 +82,60 @@ func MergeRaw(rsc []io.ReadSeeker, w io.Writer, dividerPage bool, conf *model.Co
 	return WriteContext(ctxDest, w)
 }
 
+// MergeRawStreaming merges a sequence of PDF streams with streaming approach to
+// reduce memory usage.
+// This is optimized for large numbers of PDFs by processing them one at a time.
+func MergeRawStreaming(
+	rsc []io.ReadSeeker, w io.Writer, dividerPage bool, conf *model.Configuration,
+) error {
+	if rsc == nil {
+		return errors.New("pdfcpu: MergeRawStreaming: missing rsc")
+	}
+
+	if w == nil {
+		return errors.New("pdfcpu: MergeRawStreaming: missing w")
+	}
+
+	if len(rsc) == 0 {
+		return errors.New("pdfcpu: MergeRawStreaming: empty rsc")
+	}
+
+	if conf == nil {
+		conf = model.NewDefaultConfiguration()
+	}
+	conf.Cmd = model.MERGECREATE
+	conf.ValidationMode = model.ValidationRelaxed
+	conf.CreateBookmarks = false
+
+	// Disable optimization during merge for speed - we'll optimize once at the end
+	originalOptimize := conf.OptimizeBeforeWriting
+	conf.OptimizeBeforeWriting = false
+
+	// Initialize with first PDF
+	ctxDest, err := ReadAndValidate(rsc[0], conf)
+	if err != nil {
+		return err
+	}
+
+	ctxDest.EnsureVersionForWriting()
+
+	// Process remaining PDFs one at a time
+	for i, rs := range rsc[1:] {
+		if err = appendTo(rs, strconv.Itoa(i), ctxDest, dividerPage); err != nil {
+			return err
+		}
+	}
+
+	// Only optimize once at the end if it was originally requested
+	if originalOptimize {
+		if err = OptimizeContext(ctxDest); err != nil {
+			return err
+		}
+	}
+
+	return WriteContext(ctxDest, w)
+}
+
 func prepDestContext(destFile string, rs io.ReadSeeker, conf *model.Configuration) (*model.Context, error) {
 	ctxDest, err := ReadAndValidate(rs, conf)
 	if err != nil {
